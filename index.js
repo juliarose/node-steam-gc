@@ -23,6 +23,7 @@ let jobs = {};
 let jobsGC = {};
 
 function encodeProto(proto, data) {
+    console.log('Encode', proto.name, data);
     return proto.encode(data).finish();
 }
 
@@ -53,20 +54,38 @@ function sendToGC(appid, msgType, protoBufHeader, payload, callback) {
     let header;
     
     if (protoBufHeader) {
+        /*
+            let protoMask = 0x80000000;
+            let msgType = 21;
+            // Bitwise OR assignment
+            msgType = msgType | protoMask; // -2147483627
+            // Unsigned right shift assignment 
+            msgType = msgType >>> 0; // 2147483669
+            
+            // equivalent to (Rust):
+            let proto_mask: u32 = 0x80000000;
+            let msg_type: i32 = 21;
+            let msg_type = msg_type as u32 | proto_mask;
+        */
         msgType = (msgType | PROTO_MASK) >>> 0;
         protoBufHeader.job_id_source = sourceJobId;
         let protoHeader = encodeProto(Schema.CMsgProtoBufHeader, protoBufHeader);
         header = Buffer.alloc(8);
-        header.writeUInt32LE(msgType, 0);
-        header.writeInt32LE(protoHeader.length, 4);
+        header.writeUInt32LE(msgType, 0); // 4
+        header.writeInt32LE(protoHeader.length, 4); // 4
+        // 4 + 4 + protoHeader.length
         header = Buffer.concat([header, protoHeader]);
     } else {
         header = ByteBuffer.allocate(18, ByteBuffer.LITTLE_ENDIAN);
-        header.writeUint16(1); // header version
-        header.writeUint64(JOBID_NONE);
-        header.writeUint64(sourceJobId);
+        header.writeUint16(1); // 2
+        header.writeUint64(JOBID_NONE); // 8
+        header.writeUint64(sourceJobId); // 8
+        // 2 + 8 + 8
         header = header.flip().toBuffer();
     }
+    
+    logBuffer('GC Header', header);
+    logBuffer('GC Payload', payload);
 
     return send({
         msg: EMsg.ClientToGC,
@@ -83,13 +102,10 @@ function sendToGC(appid, msgType, protoBufHeader, payload, callback) {
 function send(emsgOrHeader, body, callback) {
     // header fields: msg, proto, sourceJobID, targetJobID
     let header = typeof emsgOrHeader === 'object' ? emsgOrHeader : {"msg": emsgOrHeader};
-    let emsg = header.msg;
 
-    const Proto = protobufs[emsg];
-    
-    if (Proto) {
+    if (protobufs[header.msg]) {
         header.proto = header.proto || {};
-        body = encodeProto(Proto, body);
+        body = encodeProto(protobufs[header.msg], body);
     } else if (ByteBuffer.isByteBuffer(body)) {
         body = body.toBuffer();
     }
@@ -101,50 +117,49 @@ function send(emsgOrHeader, body, callback) {
         jobs[jobIdSource] = callback;
     }
     
-    let emsgName = EMsg[emsg] || emsg;
-    
-    if (emsg == EMsg.ServiceMethodCallFromClient && header.proto && header.proto.target_job_name) {
-        emsgName = header.proto.target_job_name;
-    }
-    
     // Make the header
-    let hdrBuf;
+    let headerBuffer;
     
     if (header.msg == EMsg.ChannelEncryptResponse) {
-        // since we're setting up the encrypted channel, we use this very minimal header
-        hdrBuf = ByteBuffer.allocate(4 + 8 + 8, ByteBuffer.LITTLE_ENDIAN);
-        hdrBuf.writeUint32(header.msg);
-        hdrBuf.writeUint64(header.targetJobID || JOBID_NONE);
-        hdrBuf.writeUint64(jobIdSource || header.sourceJobID || JOBID_NONE);
+        // unused in this example
+        // headerBuffer = ByteBuffer.allocate(4 + 8 + 8, ByteBuffer.LITTLE_ENDIAN);
+        // headerBuffer.writeUint32(header.msg);
+        // headerBuffer.writeUint64(header.targetJobID || JOBID_NONE);
+        // headerBuffer.writeUint64(jobIdSource || header.sourceJobID || JOBID_NONE);
     } else if (header.proto) {
-        // if we have a protobuf header, use that
         header.proto.client_sessionid = sessionID || 0;
         header.proto.steamid = steamID.getSteamID64();
         header.proto.jobid_source = jobIdSource || header.proto.jobid_source || header.sourceJobID || JOBID_NONE;
         header.proto.jobid_target = header.proto.jobid_target || header.targetJobID || JOBID_NONE;
-        let hdrProtoBuf = encodeProto(Schema.CMsgProtoBufHeader, header.proto);
-        hdrBuf = ByteBuffer.allocate(4 + 4 + hdrProtoBuf.length, ByteBuffer.LITTLE_ENDIAN);
-        hdrBuf.writeUint32(header.msg | PROTO_MASK);
-        hdrBuf.writeUint32(hdrProtoBuf.length);
-        hdrBuf.append(hdrProtoBuf);
+    
+        let headerProtobuf = encodeProto(Schema.CMsgProtoBufHeader, header.proto);
+        
+        headerBuffer = ByteBuffer.allocate(4 + 4 + headerProtobuf.length, ByteBuffer.LITTLE_ENDIAN);
+        headerBuffer.writeUint32(header.msg | PROTO_MASK);
+        headerBuffer.writeUint32(headerProtobuf.length);
+        headerBuffer.append(headerProtobuf);
     } else {
         // this is the standard non-protobuf extended header
-        hdrBuf = ByteBuffer.allocate(4 + 1 + 2 + 8 + 8 + 1 + 8 + 4, ByteBuffer.LITTLE_ENDIAN);
-        hdrBuf.writeUint32(header.msg);
-        hdrBuf.writeByte(36);
-        hdrBuf.writeUint16(2);
-        hdrBuf.writeUint64(header.targetJobID || JOBID_NONE);
-        hdrBuf.writeUint64(jobIdSource || header.sourceJobID || JOBID_NONE);
-        hdrBuf.writeByte(239);
-        hdrBuf.writeUint64(steamID.getSteamID64());
-        hdrBuf.writeUint32(sessionID || 0);
+        headerBuffer = ByteBuffer.allocate(4 + 1 + 2 + 8 + 8 + 1 + 8 + 4, ByteBuffer.LITTLE_ENDIAN);
+        headerBuffer.writeUint32(header.msg);
+        headerBuffer.writeByte(36);
+        headerBuffer.writeUint16(2);
+        headerBuffer.writeUint64(header.targetJobID || JOBID_NONE);
+        headerBuffer.writeUint64(jobIdSource || header.sourceJobID || JOBID_NONE);
+        headerBuffer.writeByte(239);
+        headerBuffer.writeUint64(steamID.getSteamID64());
+        headerBuffer.writeUint32(sessionID || 0);
     }
     
     // the final step - these are the bytes actually sent to the connection
-    let outputBuffer = Buffer.concat([hdrBuf.flip().toBuffer(), body]);
+    let buffer = Buffer.concat([headerBuffer.flip().toBuffer(), body]);
     
-    // actually output the whole thing to console :)
-    return Uint8Array.from(outputBuffer);
+    return buffer;
 }
 
-console.log(removeGiftedBy(1));
+function logBuffer(name, buffer) {
+    console.log(`${name}:`, Uint8Array.from(buffer));
+}
+
+logBuffer('Final message', removeGiftedBy(5845839485));
+
