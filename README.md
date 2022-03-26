@@ -1,1 +1,1 @@
-For reference - a simplified version [https://github.com/DoctorMcKay/node-tf2](node-tf2) + [https://github.com/DoctorMcKay/node-steam-user](node-steam-user) for encoding/decoding GC messages.
+For reference - a simplified version [node-tf2](https://github.com/DoctorMcKay/node-tf2) + [node-steam-user](https://github.com/DoctorMcKay/node-steam-user) for encoding/decoding GC messages.
