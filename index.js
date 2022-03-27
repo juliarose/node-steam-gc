@@ -68,11 +68,12 @@ function sendToGC(appid, msgType, protoBufHeader, payload, callback) {
             let msg_type = msg_type as u32 | proto_mask;
         */
         msgType = (msgType | PROTO_MASK) >>> 0;
-        protoBufHeader.job_id_source = sourceJobId;
+        protoBufHeader.jobid_source = sourceJobId;
         let protoHeader = encodeProto(Schema.CMsgProtoBufHeader, protoBufHeader);
         header = Buffer.alloc(8);
         header.writeUInt32LE(msgType, 0); // 4
         header.writeInt32LE(protoHeader.length, 4); // 4
+        console.log('Header length', protoHeader.length);
         // 4 + 4 + protoHeader.length
         header = Buffer.concat([header, protoHeader]);
     } else {
@@ -86,6 +87,10 @@ function sendToGC(appid, msgType, protoBufHeader, payload, callback) {
     
     logBuffer('GC Header', header);
     logBuffer('GC Payload', payload);
+    
+    payload = Buffer.concat([header, payload]);
+    logBuffer('Header with payload', payload);
+    console.log('msgtype', msgType);
 
     return send({
         msg: EMsg.ClientToGC,
@@ -95,7 +100,7 @@ function sendToGC(appid, msgType, protoBufHeader, payload, callback) {
     }, {
         appid,
         msgtype: msgType,
-        payload: Buffer.concat([header, payload])
+        payload
     });
 }
 
@@ -131,7 +136,8 @@ function send(emsgOrHeader, body, callback) {
         header.proto.steamid = steamID.getSteamID64();
         header.proto.jobid_source = jobIdSource || header.proto.jobid_source || header.sourceJobID || JOBID_NONE;
         header.proto.jobid_target = header.proto.jobid_target || header.targetJobID || JOBID_NONE;
-    
+        
+        console.log(header.proto);
         let headerProtobuf = encodeProto(Schema.CMsgProtoBufHeader, header.proto);
         
         headerBuffer = ByteBuffer.allocate(4 + 4 + headerProtobuf.length, ByteBuffer.LITTLE_ENDIAN);
