@@ -33,6 +33,29 @@ function removeGiftedBy(item_id) {
     });
 }
 
+function coerceToLong(num, signed) {
+    if (typeof num !== 'string') {
+        return num;
+    }
+    
+    return new ByteBuffer.Long.fromString(num, !signed, 10);
+}
+
+function craft(itemid) {
+    let items = [itemid];
+	let buffer = new ByteBuffer(2 + 2 + (8 * items.length), ByteBuffer.LITTLE_ENDIAN);
+    let recipe = null;
+    
+	buffer.writeInt16(recipe || -2); // -2 is wildcard
+	buffer.writeInt16(items.length);
+    
+	for (let i = 0; i < items.length; i++) {
+		buffer.writeUint64(coerceToLong(items[i]));
+	}
+    
+    return sendGC(Language.Craft, null, buffer);
+}
+
 function sendGC(msgType, protobuf, body) {
     if (protobuf) {
         return sendToGC(STEAM_APPID, msgType, {}, protobuf.encode(body).finish());
@@ -43,7 +66,7 @@ function sendGC(msgType, protobuf, body) {
 }
 
 function sendToGC(appid, msgType, protoBufHeader, payload, callback) {
-    let sourceJobId = JOBID_NONE;
+    let sourceJobId = 1;
     
     if (typeof callback === 'function') {
         sourceJobId = ++currentGCJobID;
@@ -68,6 +91,7 @@ function sendToGC(appid, msgType, protoBufHeader, payload, callback) {
             let msg_type = msg_type as u32 | proto_mask;
         */
         msgType = (msgType | PROTO_MASK) >>> 0;
+        console.log('MSGtype', msgType);
         protoBufHeader.jobid_source = sourceJobId;
         let protoHeader = encodeProto(Schema.CMsgProtoBufHeader, protoBufHeader);
         header = Buffer.alloc(8);
@@ -167,5 +191,5 @@ function logBuffer(name, buffer) {
     console.log(`${name}:`, Uint8Array.from(buffer));
 }
 
-logBuffer('Final message', removeGiftedBy(5845839485));
+logBuffer('Final message', craft('11451257476'));
 
