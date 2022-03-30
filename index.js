@@ -187,9 +187,81 @@ function send(emsgOrHeader, body, callback) {
     return buffer;
 }
 
+function fromGC(body) {
+	let msgType = body.msgtype & ~PROTO_MASK;
+	let targetJobID;
+	let payload;
+    
+    console.log('msgtype:', body.msgtype, '->', msgType);
+    
+	if (body.msgtype & PROTO_MASK) {
+		// This is a protobuf message
+		let headerLength = body.payload.readInt32LE(4);
+        console.log('Has proto header:', headerLength);
+		let protoHeader = SteamUserGameCoordinator._decodeProto(Schema.CMsgProtoBufHeader, body.payload.slice(8, 8 + headerLength));
+		targetJobID = protoHeader.job_id_target || JOBID_NONE;
+        // remove header
+		payload = body.payload.slice(8 + headerLength);
+	} else {
+		let header = ByteBuffer.wrap(body.payload.slice(0, 18));
+        logBuffer('Header', header.buffer);
+        // skip first 2 bytes
+		targetJobID = header.readUint64(2);
+        // remove header
+		payload = body.payload.slice(18);
+	}
+    
+    payload =  ByteBuffer.wrap(payload, ByteBuffer.LITTLE_ENDIAN);
+    
+    console.log('Target job ID:', targetJobID.toString());
+    receivedFromGC(body.appid, msgType, payload);
+}
+
+function receivedFromGC(appid, msgType, body) {
+    console.log('Received from GC');
+    console.log('appid:', appid);
+    console.log('msgtype:', msgType);
+    logBuffer('payload', body.buffer);
+    
+    if (appid !== 440) {
+        return;
+    } 
+    
+    switch (msgType) {
+        case Language.CraftResponse: {
+            console.log('EGCItemMsg::k_EMsgGCCraftResponse');
+            let blueprint = body.readInt16(); // recipe ID
+            let unknown = body.readUint32(); // always 0 in my experience
+        
+            let idCount = body.readUint16();
+            let itemids = [];
+        
+            for (let i = 0; i < idCount; i++) {
+                let itemid = body.readUint64().toString();
+                itemids.push(itemid);
+            }
+            
+            console.log(itemids);
+        } break;
+    }
+}
+
 function logBuffer(name, buffer) {
     console.log(`${name}:`, Uint8Array.from(buffer));
 }
 
 logBuffer('Final message', craft('11451257476'));
-
+fromGC({
+    appid: 440,
+    msgtype: 1003,
+    payload: new Uint8Array([
+          1,   0, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255,  23,   0,   0,   0,   0,   0,
+          3,   0,
+        // itemids
+        132, 196, 178, 170,   2,   0,   0,   0, 
+        133, 196, 178, 170,   2,   0,   0,   0, 
+        134, 196, 178, 170,   2,   0,   0,   0
+    ]).buffer
+})
