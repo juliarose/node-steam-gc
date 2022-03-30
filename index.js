@@ -119,7 +119,7 @@ function sendGC(msgType, protobuf, body) {
     return sendToGC(STEAM_APPID, msgType, null, body.flip().toBuffer());
 }
 
-function sendToGC(appid, msgType, protoBufHeader, payload, callback) {
+function sendToGC(appid, msgtype, protoBufHeader, payload, callback) {
     let sourceJobId = 1;
     
     if (typeof callback === 'function') {
@@ -144,12 +144,12 @@ function sendToGC(appid, msgType, protoBufHeader, payload, callback) {
             let msg_type: i32 = 21;
             let msg_type = msg_type as u32 | proto_mask;
         */
-        msgType = (msgType | PROTO_MASK) >>> 0;
-        console.log('MSGtype', msgType);
+        msgtype = (msgtype | PROTO_MASK) >>> 0;
+        console.log('MSGtype', msgtype);
         protoBufHeader.jobid_source = sourceJobId;
         let protoHeader = encodeProto(Schema.CMsgProtoBufHeader, protoBufHeader);
         header = Buffer.alloc(8);
-        header.writeUInt32LE(msgType, 0); // 4
+        header.writeUInt32LE(msgtype, 0); // 4
         header.writeInt32LE(protoHeader.length, 4); // 4
         console.log('Header length', protoHeader.length);
         // 4 + 4 + protoHeader.length
@@ -168,7 +168,7 @@ function sendToGC(appid, msgType, protoBufHeader, payload, callback) {
     
     payload = Buffer.concat([header, payload]);
     logBuffer('Header with payload', payload);
-    console.log('msgtype', msgType);
+    console.log('msgtype', msgtype);
 
     return send({
         msg: EMsg.ClientToGC,
@@ -177,7 +177,7 @@ function sendToGC(appid, msgType, protoBufHeader, payload, callback) {
         }
     }, {
         appid,
-        msgtype: msgType,
+        msgtype,
         payload
     });
 }
@@ -241,63 +241,71 @@ function send(emsgOrHeader, body, callback) {
     return buffer;
 }
 
-function fromGC(body) {
-    // & - bitwise AND
-    // ~ - bitwise NOT
-    let msgType = body.msgtype & ~PROTO_MASK;
-    let targetJobID;
-    let payload;
-    let isProtoHeader = (body.msgtype & PROTO_MASK) !== 0;
-    
-    console.log('msgtype:', body.msgtype, '->', msgType);
+function parseHeaders(isProtoHeader, payload) {
+    function wrapBuffer(buffer) {
+        return ByteBuffer.wrap(buffer, ByteBuffer.LITTLE_ENDIAN);
+    }
     
     if (isProtoHeader) {
         // This is a protobuf message
-        let headerLength = body.payload.readInt32LE(4);
+        const headerLength = payload.readInt32LE(4);
         console.log('Has proto header:', headerLength);
-        let protoHeader = decodeProto(Schema.CMsgProtoBufHeader, body.payload.slice(8, 8 + headerLength));
-        targetJobID = protoHeader.job_id_target || JOBID_NONE;
-        // remove header from payload
-        payload = body.payload.slice(8 + headerLength);
-    } else {
-        let header = ByteBuffer.wrap(body.payload.slice(0, 18));
-        logBuffer('Header', header.buffer);
-        targetJobID = header.readUint64(2);
-        // remove header from payload
-        payload = body.payload.slice(18);
+        const protoHeader = decodeProto(Schema.CMsgProtoBufHeader, payload.slice(8, 8 + headerLength));
+        const targetJobID = protoHeader.job_id_target || JOBID_NONE;
+        
+        return {
+            targetJobID,
+            // remove header from payload
+            payload: wrapBuffer(payload.slice(8 + headerLength))
+        };
     }
     
-    payload = ByteBuffer.wrap(payload, ByteBuffer.LITTLE_ENDIAN);
+    const header = ByteBuffer.wrap(payload.slice(0, 18));
+    logBuffer('Header', header.buffer);
+    const targetJobID = header.readUint64(2);
     
-    console.log('Target job ID:', targetJobID.toString());
-    receivedFromGC(body.appid, msgType, payload);
+    return {
+        targetJobID,
+        // remove header from payload
+        payload: wrapBuffer(payload.slice(18))
+    };
 }
 
-function receivedFromGC(appid, msgType, body) {
+function fromGC(body) {
+    // & - bitwise AND
+    // ~ - bitwise NOT
+    const msgtype = body.msgtype & ~PROTO_MASK;
+    const isProtoHeader = (body.msgtype & PROTO_MASK) !== 0;
+    const { targetJobID, payload } = parseHeaders(isProtoHeader, body.payload);
+    
+    console.log('msgtype:', body.msgtype, '->', msgtype);
+    console.log('Target job ID:', targetJobID.toString());
+    receivedFromGC(body.appid, msgtype, payload);
+}
+
+function receivedFromGC(appid, msgtype, body) {
     console.log('Received from GC');
     console.log('appid:', appid);
-    console.log('msgtype:', msgType);
+    console.log('msgtype:', msgtype);
     logBuffer('payload', body.buffer);
     
     if (appid !== 440) {
         return;
     } 
     
-    switch (msgType) {
+    switch (msgtype) {
         case Language.CraftResponse: {
             console.log('EGCItemMsg::k_EMsgGCCraftResponse');
-            let blueprint = body.readInt16(); // recipe ID
-            let unknown = body.readUint32(); // always 0 in my experience
+            const blueprint = body.readInt16(); // recipe ID
+            const unknown = body.readUint32(); // always 0 in my experience
+            const assetidCount = body.readUint16();
+            const assetids = [];
         
-            let idCount = body.readUint16();
-            let itemids = [];
-        
-            for (let i = 0; i < idCount; i++) {
-                let itemid = body.readUint64().toString();
-                itemids.push(itemid);
+            for (let i = 0; i < assetidCount; i++) {
+                assetids.push(body.readUint64().toString());
             }
             
-            console.log(itemids);
+            console.log(assetids);
         } break;
         // 21
         case Language.SO_Create: {
@@ -305,7 +313,7 @@ function receivedFromGC(appid, msgType, body) {
             
             switch (message.type_id) {
                 case 1: {
-                    let item = decodeProto(TFSchema.CSOEconItem, message.object_data);
+                    const item = decodeProto(TFSchema.CSOEconItem, message.object_data);
                     
                     console.log('Item acquired', item);
                 } break;
@@ -329,20 +337,20 @@ function uint8ArrayToBuffer(arr) {
   }
 
 logBuffer('Final message', craft('11451257476'));
-// fromGC({
-//     appid: 440,
-//     msgtype: 1003,
-//     payload: uint8ArrayToBuffer(new Uint8Array([
-//           1,   0, 255, 255, 255, 255, 255, 255,
-//         255, 255, 255, 255, 255, 255, 255, 255,
-//         255, 255,  23,   0,   0,   0,   0,   0,
-//           3,   0,
-//         // itemids
-//         132, 196, 178, 170,   2,   0,   0,   0, 
-//         133, 196, 178, 170,   2,   0,   0,   0, 
-//         134, 196, 178, 170,   2,   0,   0,   0
-//     ]))
-// })
+fromGC({
+    appid: 440,
+    msgtype: 1003,
+    payload: uint8ArrayToBuffer(new Uint8Array([
+          1,   0, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255,  23,   0,   0,   0,   0,   0,
+          3,   0,
+        // itemids
+        132, 196, 178, 170,   2,   0,   0,   0, 
+        133, 196, 178, 170,   2,   0,   0,   0, 
+        134, 196, 178, 170,   2,   0,   0,   0
+    ]))
+})
 fromGC({
     appid: 440,
     msgtype: 2147483669,
