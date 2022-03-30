@@ -27,6 +27,60 @@ function encodeProto(proto, data) {
     return proto.encode(data).finish();
 }
 
+function decodeProto(proto, encoded) {
+    if (ByteBuffer.isByteBuffer(encoded)) {
+        encoded = encoded.toBuffer();
+    }
+
+    let decoded = proto.decode(encoded);
+    let objNoDefaults = proto.toObject(decoded, {"longs": String});
+    let objWithDefaults = proto.toObject(decoded, {"defaults": true, "longs": String});
+
+    function replaceDefaults(noDefaults, withDefaults) {
+        if (Array.isArray(withDefaults)) {
+            return withDefaults.map((val, idx) => replaceDefaults(noDefaults[idx], val));
+        }
+
+        for (let i in withDefaults) {
+            if (!withDefaults.hasOwnProperty(i)) {
+                continue;
+            }
+
+            if (withDefaults[i] && typeof withDefaults[i] === 'object' && !Buffer.isBuffer(withDefaults[i])) {
+                // Covers both object and array cases, both of which will work
+                // Won't replace empty arrays, but that's desired behavior
+                withDefaults[i] = replaceDefaults(noDefaults[i], withDefaults[i]);
+            } else if (typeof noDefaults[i] === 'undefined' && isReplaceableDefaultValue(withDefaults[i])) {
+                withDefaults[i] = null;
+            }
+        }
+
+        return withDefaults;
+    }
+
+    function isReplaceableDefaultValue(val) {
+        if (Buffer.isBuffer(val) && val.length == 0) {
+            // empty buffer is replaceable
+            return true;
+        }
+
+        if (Array.isArray(val)) {
+            // empty array is not replaceable (empty repeated fields)
+            return false;
+        }
+
+        if (val === '0') {
+            // Zero as a string is replaceable (64-bit integer)
+            return true;
+        }
+
+        // Anything falsy is true
+        return !val;
+    }
+    
+    return replaceDefaults(objNoDefaults, objWithDefaults);
+}
+
 function removeGiftedBy(item_id) {
     return sendGC(Language.RemoveGiftedBy, TFSchema.CMsgGCRemoveCustomizationAttributeSimple, {
         item_id
@@ -193,14 +247,15 @@ function fromGC(body) {
     let msgType = body.msgtype & ~PROTO_MASK;
     let targetJobID;
     let payload;
+    let isProtoHeader = (body.msgtype & PROTO_MASK) !== 0;
     
     console.log('msgtype:', body.msgtype, '->', msgType);
     
-    if (body.msgtype & PROTO_MASK) {
+    if (isProtoHeader) {
         // This is a protobuf message
         let headerLength = body.payload.readInt32LE(4);
         console.log('Has proto header:', headerLength);
-        let protoHeader = SteamUserGameCoordinator._decodeProto(Schema.CMsgProtoBufHeader, body.payload.slice(8, 8 + headerLength));
+        let protoHeader = decodeProto(Schema.CMsgProtoBufHeader, body.payload.slice(8, 8 + headerLength));
         targetJobID = protoHeader.job_id_target || JOBID_NONE;
         // remove header from payload
         payload = body.payload.slice(8 + headerLength);
@@ -212,7 +267,7 @@ function fromGC(body) {
         payload = body.payload.slice(18);
     }
     
-    payload =  ByteBuffer.wrap(payload, ByteBuffer.LITTLE_ENDIAN);
+    payload = ByteBuffer.wrap(payload, ByteBuffer.LITTLE_ENDIAN);
     
     console.log('Target job ID:', targetJobID.toString());
     receivedFromGC(body.appid, msgType, payload);
@@ -244,6 +299,18 @@ function receivedFromGC(appid, msgType, body) {
             
             console.log(itemids);
         } break;
+        // 21
+        case Language.SO_Create: {
+            const message = decodeProto(TFSchema.CMsgSOSingleObject, body);
+            
+            switch (message.type_id) {
+                case 1: {
+                    let item = decodeProto(TFSchema.CSOEconItem, message.object_data);
+                    
+                    console.log('Item acquired', item);
+                } break;
+            }
+        } break;
     }
 }
 
@@ -251,18 +318,35 @@ function logBuffer(name, buffer) {
     console.log(`${name}:`, Uint8Array.from(buffer));
 }
 
+function uint8ArrayToBuffer(arr) {
+    var buffer = Buffer.alloc(arr.length);
+    
+    for (var i = 0; i < buffer.length; ++i) {
+        buffer[i] = arr[i];
+    }
+    
+    return buffer;
+  }
+
 logBuffer('Final message', craft('11451257476'));
+// fromGC({
+//     appid: 440,
+//     msgtype: 1003,
+//     payload: uint8ArrayToBuffer(new Uint8Array([
+//           1,   0, 255, 255, 255, 255, 255, 255,
+//         255, 255, 255, 255, 255, 255, 255, 255,
+//         255, 255,  23,   0,   0,   0,   0,   0,
+//           3,   0,
+//         // itemids
+//         132, 196, 178, 170,   2,   0,   0,   0, 
+//         133, 196, 178, 170,   2,   0,   0,   0, 
+//         134, 196, 178, 170,   2,   0,   0,   0
+//     ]))
+// })
 fromGC({
     appid: 440,
-    msgtype: 1003,
-    payload: new Uint8Array([
-          1,   0, 255, 255, 255, 255, 255, 255,
-        255, 255, 255, 255, 255, 255, 255, 255,
-        255, 255,  23,   0,   0,   0,   0,   0,
-          3,   0,
-        // itemids
-        132, 196, 178, 170,   2,   0,   0,   0, 
-        133, 196, 178, 170,   2,   0,   0,   0, 
-        134, 196, 178, 170,   2,   0,   0,   0
-    ]).buffer
+    msgtype: 2147483669,
+    payload: uint8ArrayToBuffer(new Uint8Array([
+        21, 0, 0, 128, 0, 0, 0, 0, 9, 76, 236, 88, 20, 1, 0, 16, 1, 16, 1, 26, 45, 8, 178, 153, 251, 213, 42, 16, 204, 216, 227, 162, 1, 24, 131, 128, 128, 128, 12, 32, 138, 39, 40, 1, 48, 3, 56, 6, 64, 4, 72, 4, 112, 0, 120, 0, 128, 1, 191, 208, 202, 171, 41, 152, 1, 1, 33, 222, 117, 103, 134, 211, 6, 2, 0
+    ]))
 })
