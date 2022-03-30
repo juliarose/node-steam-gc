@@ -43,15 +43,15 @@ function coerceToLong(num, signed) {
 
 function craft(itemid) {
     let items = [itemid];
-	let buffer = new ByteBuffer(2 + 2 + (8 * items.length), ByteBuffer.LITTLE_ENDIAN);
+    let buffer = new ByteBuffer(2 + 2 + (8 * items.length), ByteBuffer.LITTLE_ENDIAN);
     let recipe = null;
     
-	buffer.writeInt16(recipe || -2); // -2 is wildcard
-	buffer.writeInt16(items.length);
+    buffer.writeInt16(recipe || -2); // -2 is wildcard
+    buffer.writeInt16(items.length);
     
-	for (let i = 0; i < items.length; i++) {
-		buffer.writeUint64(coerceToLong(items[i]));
-	}
+    for (let i = 0; i < items.length; i++) {
+        buffer.writeUint64(coerceToLong(items[i]));
+    }
     
     return sendGC(Language.Craft, null, buffer);
 }
@@ -188,28 +188,29 @@ function send(emsgOrHeader, body, callback) {
 }
 
 function fromGC(body) {
-	let msgType = body.msgtype & ~PROTO_MASK;
-	let targetJobID;
-	let payload;
+    // & - bitwise AND
+    // ~ - bitwise NOT
+    let msgType = body.msgtype & ~PROTO_MASK;
+    let targetJobID;
+    let payload;
     
     console.log('msgtype:', body.msgtype, '->', msgType);
     
-	if (body.msgtype & PROTO_MASK) {
-		// This is a protobuf message
-		let headerLength = body.payload.readInt32LE(4);
+    if (body.msgtype & PROTO_MASK) {
+        // This is a protobuf message
+        let headerLength = body.payload.readInt32LE(4);
         console.log('Has proto header:', headerLength);
-		let protoHeader = SteamUserGameCoordinator._decodeProto(Schema.CMsgProtoBufHeader, body.payload.slice(8, 8 + headerLength));
-		targetJobID = protoHeader.job_id_target || JOBID_NONE;
-        // remove header
-		payload = body.payload.slice(8 + headerLength);
-	} else {
-		let header = ByteBuffer.wrap(body.payload.slice(0, 18));
+        let protoHeader = SteamUserGameCoordinator._decodeProto(Schema.CMsgProtoBufHeader, body.payload.slice(8, 8 + headerLength));
+        targetJobID = protoHeader.job_id_target || JOBID_NONE;
+        // remove header from payload
+        payload = body.payload.slice(8 + headerLength);
+    } else {
+        let header = ByteBuffer.wrap(body.payload.slice(0, 18));
         logBuffer('Header', header.buffer);
-        // skip first 2 bytes
-		targetJobID = header.readUint64(2);
-        // remove header
-		payload = body.payload.slice(18);
-	}
+        targetJobID = header.readUint64(2);
+        // remove header from payload
+        payload = body.payload.slice(18);
+    }
     
     payload =  ByteBuffer.wrap(payload, ByteBuffer.LITTLE_ENDIAN);
     
